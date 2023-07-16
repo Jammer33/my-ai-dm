@@ -9,12 +9,13 @@ class MemoryService {
   pinecone: PineconeClient;
   index: string;
   s3Client: S3Client;
+  bucketName: string;
 
   constructor() {
     this.apiKey = process.env.OPENAI_API_KEY || "";
     this.pinecone = new PineconeClient();
     this.pinecone.init({
-      environment: "northamerica-northeast1-gcp",
+      environment: process.env.PINECONE_ENVIRONMENT || "",
       apiKey: process.env.PINECONE_API_KEY || "",
     });
     this.index = process.env.PINECONE_INDEX || "";
@@ -25,6 +26,7 @@ class MemoryService {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
       }
     });
+    this.bucketName = process.env.S3_BUCKET_NAME || "ai-dungeon-master";
   }
 
   async getEmbedding(text: string) {
@@ -41,7 +43,7 @@ class MemoryService {
     });
 
     if (!response.ok) {
-      console.error("Error getting embeddings:", response.statusText);
+      console.error("Error getting embeddings:", await response.json());
       return;
     }
 
@@ -51,8 +53,8 @@ class MemoryService {
 
   async storeS3Bucket(content: string, importance: number, timestamp: Date) {
     const key: string = uuidv4();
-    const response = await this.s3Client.send(new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME || "",
+    await this.s3Client.send(new PutObjectCommand({
+      Bucket: this.bucketName,
       Body: JSON.stringify({
         content: content,
         importance: importance,
@@ -63,10 +65,10 @@ class MemoryService {
     return key;
   }
 
-  async retrieveS3Bucket(eTag: string) {
+  async retrieveS3Bucket(key: string) {
     const response : GetObjectCommandOutput = await this.s3Client.send(new GetObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME || "",
-      Key: eTag,
+      Bucket: this.bucketName,
+      Key: key,
     })); 
     let body = await response.Body?.transformToString('utf-8') || "";
     const bodyObj = JSON.parse(body);
@@ -115,7 +117,6 @@ class MemoryService {
       },
     });
 
-
     const ids = queryResponse?.matches?.map((match) => match.id) || [];
     if (ids.length === 0) {
       return [];
@@ -128,7 +129,7 @@ class MemoryService {
         importance: result.importance,
       });
     }
-    console.log(res);
+    
     return res;
   }
 
@@ -154,7 +155,6 @@ async retrieveStory(query: string, n = 3) {
         importance: result.importance,
       });
     }
-    console.log(res);
     return res;
   }
 }
