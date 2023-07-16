@@ -71,8 +71,7 @@ class MemoryService {
       Key: key,
     })); 
     let body = await response.Body?.transformToString('utf-8') || "";
-    const bodyObj = JSON.parse(body);
-    return (bodyObj.content, bodyObj.importance, bodyObj.timestamp);
+    return JSON.parse(body);
   }
 
   async store(text: string, importance: number, sessionToken?: string) {
