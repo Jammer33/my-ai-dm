@@ -4,7 +4,7 @@ import DungeonMasterService from '../services/DungeonMasterService';
 const router = express.Router();
 
 // Get openai GPT3 response
-router.get('/openai', async (req, res) => {
+router.post('/openai', async (req, res) => {
   Promise.resolve(DungeonMasterService.getDMReply(req.body.message, req.body.sessionToken)).then((data) => {
     return res.json({ message: data });
   });
