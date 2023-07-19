@@ -1,36 +1,42 @@
-import OpenAIService, { Message } from './OpenAIService';
-import MemoryService from '../memory/MemoryService';
+import MemoryService from "./MemoryService";
+import OpenAIService from "./OpenAIService";
 
 class DungeonMasterService {
-
-    DungeonMasterPrompt = "You are a dungeon master. You must guide your players through an engaging and fun story! Only tell players what they're actual in-game characters know, nothing more. This game is played in real-time. Reveal nothing about later events to players."
+    // Prompt get iteratively update the session state with new story information and return the new state
+    private firstPrompt = "The following is the current state of a Dungeons & Dragons campaign."
+    private secondPrompt = "The following is new info on what just happened in the story \n NEW INFO"
+    private thirdPrompt = "YOUR ROLE \nIt is your job to update the current state of the story with the new story information provided. Please include important information about the player characters, quests, locations, items, NPCs etc. Also keep track of the current time of day, weather, and current location of the characters. Feel free to update and delete old data as it becomes irrelevant. Include nothing except the new state. You have full creative control. Feel free to remove old info, update anything, add new sections, etc. The Dungeon Master will rely on what you put here to keep track of the story and gameplay. \n Please provide the updated game state below. Starting with \"CURRENT STATE\"..."
 
     constructor() {}
 
-    async getDMReply(message: string, sessionToken: string) { 
-        // const memories = await MemoryService.retrieveStory(message, 1);
-        const memories = await MemoryService.retrieve(message, 5, sessionToken);
-        const response = await OpenAIService.getChat(this.formateMessages(memories, message));
-
-        MemoryService.store(this.formatMemory(message, response), 1, sessionToken);
-        
-        return response;
+    async updateState(newStory: string, sessionToken: string) {
+        var oldState = await MemoryService.retrieveSessionState(sessionToken);
+        var newState = await OpenAIService.getChat(
+            [
+                { content: this.firstPrompt, role: "system" },
+                { content: oldState, role: "system" },
+                { content: this.secondPrompt, role: "system" },
+                { content: newStory, role: "system" },
+                { content: this.thirdPrompt, role: "system" },
+            ]
+        );
+        await MemoryService.storeSessionState(sessionToken, newState);
+        return newState;
     }
 
-    private formateMessages(memories: { content: string }[], message: string): Message[] {
-        const memoryContext: string = "[Story Context]\n" + memories.map((memory) => memory.content).join(" ");
-        const userInputer: string = "[User Input]\n" + message;
-        const messages: Message[] = [
-            { content: this.DungeonMasterPrompt, role: "system" },
-            { content: memoryContext, role: "system" },
-            { content: userInputer, role: "user" },
-        ];
+    private firstNewStatePrompt = "The following is the beginning of a new Dungeons & Dragons campaign."
+    private secondNewStatePrompt = "It is your job to create the STATE of the story with the story information provided. Please include important information about the player characters, quests, locations, items, NPCs etc. Also keep track of the current time of day, weather, and current location of the characters. You have full creative control on what is stored here but remember that the Dungeon Master will rely on what you put here to keep track of the story and gameplay. \n Please provide the game state below. Starting with \"CURRENT STATE\"..."
 
-        return messages;
-    }
-
-    formatMemory(userMessage: string, dungeonMasterResponse: string) {
-        return "[User Input]\n" + userMessage + "\n[DM Response]\n" + dungeonMasterResponse + "\n";
+    async createNewState(newStory: string, sessionToken: string) {
+        var newState = await OpenAIService.getChat(
+            [
+                { content: this.firstNewStatePrompt, role: "system" },
+                { content: newStory, role: "system" },
+                { content: this.secondNewStatePrompt, role: "system" },
+            ]
+        );
+        await MemoryService.storeSessionState(sessionToken, newState);
+        return newState;
     }
 
 }

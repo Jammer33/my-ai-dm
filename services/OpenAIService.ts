@@ -87,10 +87,13 @@ class OpenAIService {
             messages: messages,
             model: this.model,
         };
-
+        console.log("Request")
         console.log(messages)
         
-        return this.callApi(endpoint, method, data);
+        const response = await this.callApi(endpoint, method, data);
+        console.log("Response")
+        console.log(response)
+        return response;
     }
 
     private messagesFormatter(messages: string[]) {

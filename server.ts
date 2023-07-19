@@ -4,7 +4,7 @@ import { config } from 'dotenv';
 (async () => {
   await config({path: '.env'});
 })();
-import MemoryModule from './memory/MemoryService';
+import MemoryModule from './services/MemoryService';
 
 import dungeonMasterRoutes from './routes/dungeonMaster';
 
@@ -25,29 +25,15 @@ app.listen(port, () => {
 });
 
 app.post("/memories", async (req, res) => {
-  const { memory, importance } = req.body;
-  await MemoryModule.store(memory, importance);
+  const { memory, importance, sessionToken } = req.body;
+  await MemoryModule.store(memory, importance, sessionToken);
   res.sendStatus(201);
 });
 
 app.post("/memories/search", async (req, res) => {
-  const { query } = req.body;
-  const memories = await MemoryModule.retrieve(query);
+  const { query, sessionToken } = req.body;
+  const memories = await MemoryModule.retrieveRecent(sessionToken);
   res.json(memories);
-});
-
-// route for getting story info
-app.post("/story/search", async (req, res) => {
-  const { query } = req.body;
-  const memories = await MemoryModule.retrieveStory(query);
-  res.json(memories);
-});
-
-// route for storing story info
-app.post("/story/store", async (req, res) => {
-  const { story } = req.body;
-  await MemoryModule.storeStory(story);
-  res.sendStatus(201);
 });
 
 

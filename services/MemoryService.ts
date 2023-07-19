@@ -4,10 +4,12 @@ import mysql, { OkPacket, RowDataPacket } from "mysql2/promise";
 import { GetObjectCommand, GetObjectCommandOutput, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { v4 as uuidv4 } from 'uuid';
 
+
 class MemoryService {
   apiKey: string;
   pinecone: PineconeClient;
   index: string;
+  sqlClient: mysql.Pool;
   s3Client: S3Client;
   bucketName: string;
 
@@ -15,10 +17,19 @@ class MemoryService {
     this.apiKey = process.env.OPENAI_API_KEY || "";
     this.pinecone = new PineconeClient();
     this.pinecone.init({
-      environment: process.env.PINECONE_ENVIRONMENT || "",
+      environment: "northamerica-northeast1-gcp",
       apiKey: process.env.PINECONE_API_KEY || "",
     });
     this.index = process.env.PINECONE_INDEX || "";
+
+    this.sqlClient = mysql.createPool({
+      host: 'localhost',
+      user: process.env.SQL_USER,
+      password: process.env.SQL_PASSWORD,
+      database: 'dungeon_master',
+      port: 3306,
+    });
+
     this.s3Client = new S3Client({
       region: "us-east-2",
       credentials: {
@@ -43,7 +54,7 @@ class MemoryService {
     });
 
     if (!response.ok) {
-      console.error("Error getting embeddings:", await response.json());
+      console.error("Error getting embeddings:", response.statusText);
       return;
     }
 
@@ -74,39 +85,36 @@ class MemoryService {
     return JSON.parse(body);
   }
 
-  async store(text: string, importance: number, sessionToken?: string) {
+  async store(text: string, importance: number, sessionToken: string) {
+    return this.storeInternal(text, importance, sessionToken);
+  }
+
+
+  private async storeInternal(text: string, importance: number, namespace: string) {
     const embedding = await this.getEmbedding(text);
     const timestamp = new Date();
 
     const id = await this.storeS3Bucket(text, importance, timestamp);
 
-    const index = this.pinecone.Index(this.index);
-    await index.upsert({
-      upsertRequest: {
-        vectors: [{ id: id, values: embedding }],
-        namespace: sessionToken,
-      },
-    });
-  }
-
-  async storeStory(text: string) {
-    const embedding = await this.getEmbedding(text);
-    const timestamp = new Date();
-
-    const id = await this.storeS3Bucket(text, 0, timestamp);
+    await this.sqlClient.query<OkPacket>(
+      "INSERT INTO memories (s3Id, timestamp, sessionToken) VALUES (?, ?, ?)",
+      [id, timestamp, namespace]
+    );
 
     const index = this.pinecone.Index(this.index);
     await index.upsert({
       upsertRequest: {
         vectors: [{ id: id.toString(), values: embedding }],
-        namespace: "story",
+        namespace: namespace,
       },
     });
   }
 
-  async retrieve(query: string, n = 3, sessionToken?: string) {
+  async retrieveRelevant(query: string, n = 3, sessionToken: string) {
     const queryEmbedding = await this.getEmbedding(query);
+    console.log("query embedding:", queryEmbedding);
     const index = this.pinecone.Index(this.index);
+    console.log("index:", index);
     const queryResponse = await index.query({
       queryRequest: {
         vector: queryEmbedding,
@@ -115,11 +123,13 @@ class MemoryService {
         namespace: sessionToken,
       },
     });
+    console.log("query response:", queryResponse);
 
     const ids = queryResponse?.matches?.map((match) => match.id) || [];
     if (ids.length === 0) {
       return [];
     }
+
     let res = [];
     for (let i = 0; i < ids.length; i++) {
       const result = await this.retrieveS3Bucket(ids[i]);
@@ -132,29 +142,39 @@ class MemoryService {
     return res;
   }
 
-async retrieveStory(query: string, n = 3) {
-    const queryEmbedding = await this.getEmbedding(query);
-    const index = this.pinecone.Index(this.index);
-    const queryResponse = await index.query({
-      queryRequest: {
-        vector: queryEmbedding,
-        topK: n,
-        includeValues: true,
-        namespace: "story",
-      },
-    });
-
-
-    const ids = queryResponse?.matches?.map((match) => match.id) || [];
+  async retrieveRecent(sessionToken: string) {
+    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
+      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp DESC LIMIT 5",
+      [sessionToken]
+    );
+    
     let res = [];
-    for (let i = 0; i < ids.length; i++) {
-      const result = await this.retrieveS3Bucket(ids[i]);
+    for (let i = 0; i < rows.length; i++) {
+      const result = await this.retrieveS3Bucket(rows[i].s3Id);
       res.push({
         content: result.content,
         importance: result.importance,
       });
     }
     return res;
+  }
+
+  async retrieveSessionState(sessionToken: string) {
+    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
+      "SELECT content FROM session_state WHERE session_token = ?",
+      [sessionToken]
+    );
+
+    return rows[0]?.content;
+  }
+
+  async storeSessionState(sessionToken: string, state: string) {
+    const [result] = await this.sqlClient.query<OkPacket>(
+      "INSERT INTO session_state (session_token, content) VALUES (?, ?) ON DUPLICATE KEY UPDATE content = ?",
+      [sessionToken, state, state]
+    );
+
+    return result.insertId;
   }
 }
 
