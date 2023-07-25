@@ -36,7 +36,7 @@ router.post("/signin", async (req, res) => {
 });
 
 router.post("/signup", async (req, res) => {
-  const { email, password, confirmPassword, firstName, lastName } = req.body;
+  const { email, password, confirmPassword, username } = req.body;
 
   try {
     const existingUser = await User.findOne({ email });
@@ -52,7 +52,7 @@ router.post("/signup", async (req, res) => {
     const result = await User.create({
       email,
       password: hashedPassword,
-      name: `${firstName} ${lastName}`,
+      name: username,
     });
 
     const token = jwt.sign({ email: result.email, id: result._id }, "test", {
