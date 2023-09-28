@@ -144,7 +144,7 @@ class MemoryService {
 
   async retrieveRecent(sessionToken: string) {
     const [rows] = await this.sqlClient.query<RowDataPacket[]>(
-      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp DESC LIMIT 5",
+      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp DESC LIMIT 3",
       [sessionToken]
     );
     
@@ -158,6 +158,23 @@ class MemoryService {
     }
     return res;
   }
+
+  async retrieveAll(sessionToken: string) {
+    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
+      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp ASC",
+      [sessionToken]
+    );
+
+    let res = [];
+    for (let i = 0; i < rows.length; i++) {
+      const result = await this.retrieveS3Bucket(rows[i].s3Id);
+      res.push({
+        content: result.content,
+      });
+    }
+    return res;
+  }
+
 
   async retrieveSessionState(sessionToken: string) {
     const [rows] = await this.sqlClient.query<RowDataPacket[]>(
