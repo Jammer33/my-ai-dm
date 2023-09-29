@@ -3,6 +3,9 @@ import { PineconeClient } from "@pinecone-database/pinecone";
 import mysql, { OkPacket, RowDataPacket } from "mysql2/promise";
 import { GetObjectCommand, GetObjectCommandOutput, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { v4 as uuidv4 } from 'uuid';
+import { NewUser, NewUserWithToken } from "../models/General";
+import { DbUser } from "../db_models/DbUser";
+import { BadRequestError } from "../middleware/ErrorHandler";
 
 
 class MemoryService {
@@ -23,10 +26,10 @@ class MemoryService {
     this.index = process.env.PINECONE_INDEX || "";
 
     this.sqlClient = mysql.createPool({
-      host: 'localhost',
-      user: process.env.SQL_USER,
-      password: process.env.SQL_PASSWORD,
-      database: 'dungeon_master',
+      host: process.env.AWS_RDS_HOST,
+      user: process.env.AWS_RDS_USER,
+      password: process.env.AWS_RDS_PASS,
+      database: 'ai_dm',
       port: 3306,
     });
 
@@ -192,6 +195,31 @@ class MemoryService {
     );
 
     return result.insertId;
+  }
+
+  async storeUser(newUser: NewUserWithToken) {
+    try {
+      const [result] = await this.sqlClient.query<OkPacket>(
+        "INSERT INTO users (username, password, email, user_token) VALUES (?, ?, ?, ?)",
+        [newUser.username, newUser.password, newUser.email, newUser.userToken]
+      );
+      if (!result.insertId) {
+        throw new BadRequestError("Error creating user");
+      }
+      return newUser;
+    }
+    catch (err) {
+      throw new BadRequestError("User already exists");
+    }
+  }
+
+  async retrieveUser(email: string): Promise<DbUser | undefined> {
+    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
+      "SELECT * FROM users WHERE email = ?",
+      [email]
+    );
+
+    return rows[0] as DbUser | undefined;
   }
 }
 

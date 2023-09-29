@@ -3,6 +3,7 @@ import { Method } from '../models/Methods';
 import EventSource from 'eventsource';
 import { ChatCompletionRequestMessage, Configuration, CreateChatCompletionRequest, OpenAIApi } from "openai";
 import { Socket } from 'socket.io';
+import { InternalServerError } from '../middleware/ErrorHandler';
 
 // Endpoints for OpenAI API type
 const enum OpenAIEndpoint {
@@ -71,7 +72,7 @@ class OpenAIService {
             return completion.data.choices[0].message!!.content as string;
         } catch (error: any) {
             console.log("Error getting response from OpenAI API " + error.data);
-            throw new Error("Error getting response from OpenAI API " + error);
+            throw new InternalServerError("Error getting response from OpenAI API " + error);
         }
         
         
