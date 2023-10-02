@@ -1,7 +1,31 @@
 import { Request, Response, NextFunction } from 'express';
+import socket from '../routes/WebSocket';
 
-// Error-handling middleware
-const ErrorHandler = (err: CustomError, req: Request, res: Response, next: NextFunction) => {
+const ErrorHandler = (err: CustomError | Error, req: Request, res: Response, next: NextFunction) => {
+    // If the error is not an instance of CustomError, default to InternalServerError
+    let error: CustomError = err as CustomError;
+    if (!(err instanceof CustomError)) {
+        error = new InternalServerError(err.message);
+    }
+
+    // Environment-based Handling & Logging
+    if (process.env.NODE_ENV === 'production') {
+        console.error(err); // Logging
+    } else {
+        console.log(err.stack); // Stack trace for development
+    }
+
+    const errorResponse = {
+        error: {
+            code: error.statusCode,
+            message: error.message,
+        }
+    };
+
+    res.status(error.statusCode).send(errorResponse);
+};
+// Socket.io error-handling middleware
+const SocketErrorHandler = (socket: any, next: any) => (err: CustomError) => {
     // Environment-based Handling & Logging
     if (process.env.NODE_ENV === 'production') {
         if (!err.statusCode) err = new InternalServerError(); // Default to 500 error for unexpected issues
@@ -14,12 +38,13 @@ const ErrorHandler = (err: CustomError, req: Request, res: Response, next: NextF
         error: {
             code: err.statusCode,
             message: err.message,
-            details: err.serializeErrors()
         }
     };
 
-    res.status(err.statusCode).send(errorResponse);
+    socket.emit('error', errorResponse);
+    next();
 };
+
 // Base CustomError abstract class
 abstract class CustomError extends Error {
     abstract statusCode: number;
@@ -135,6 +160,7 @@ class NotImplementedError extends CustomError {
 // Export the error handling middleware and custom errors
 export {
     ErrorHandler,
+    SocketErrorHandler,
     BadRequestError,
     UnauthorizedError,
     ForbiddenError,

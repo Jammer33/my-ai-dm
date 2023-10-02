@@ -1,12 +1,12 @@
-import { NewUser, UserLoginRequest, UserToken } from "../models/General";
-import crypto from "crypto";
+import { NewUser, UserLoginRequest } from "../models/General";
 import bcrypt from "bcrypt";
-import MemoryService from "./MemoryService";
 import { generateUserToken } from "../utils/UserUtils";
 import { BadRequestError, InternalServerError } from "../middleware/ErrorHandler";
+import jwt from "jsonwebtoken";
+import UserQueries from "../queries/UserQueries";
 
 class UserService {
-    async signupUser(user: NewUser): Promise<UserToken> {
+    async signupUser(user: NewUser): Promise<String> {
         // generate a random token with full alphabet and numbers not just hex no symbols
         const userToken = generateUserToken();
 
@@ -14,20 +14,20 @@ class UserService {
         // hash and salt the password
         const hashedPassword = bcrypt.hashSync(user.password, 10);
         // store the user in the database
-        const createdUser = await MemoryService.storeUser({
-            ...user,
-            userToken,
-            password: hashedPassword,
-        });
+
+        const createdUser = await UserQueries.create(user.username, user.email, hashedPassword, userToken);
+
         if (!createdUser) {
             throw new InternalServerError("Error creating user");
         }
-        return await createdUser.userToken;
+        const jwtoken = jwt.sign({ userToken }, process.env.SECRET_KEY!!, { expiresIn: '1w' })
+
+        return await jwtoken;
     }
 
-    async loginUser(user: UserLoginRequest): Promise<UserToken> {
+    async loginUser(user: UserLoginRequest): Promise<String> {
         // retrieve the user from the database
-        const storedUser = await MemoryService.retrieveUser(user.email);
+        const storedUser = await UserQueries.findByEmail(user.email);
         if (!storedUser) {
             throw new BadRequestError("No user found with that email");
         }
@@ -37,7 +37,9 @@ class UserService {
             throw new BadRequestError("Password and email do not match");
         }
 
-        return await storedUser.user_token;
+        const jwtoken = jwt.sign({ userToken: storedUser.userToken }, process.env.SECRET_KEY!!, { expiresIn: '1w' })
+
+        return await jwtoken;
     }
 }
 

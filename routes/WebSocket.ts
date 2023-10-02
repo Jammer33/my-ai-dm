@@ -1,7 +1,12 @@
 import { Server } from "socket.io";
 import DungeonMasterController from "../controllers/DungeonMasterController";
+import { SocketErrorHandler } from "../middleware/ErrorHandler";
+import socketAuth from "../middleware/SocketAuth";
 
 const socket = (io: Server) => {
+    io.use(SocketErrorHandler);
+    io.use(socketAuth);
+
     io.on("connection", (socket) => {
         console.log("a user connected");
 

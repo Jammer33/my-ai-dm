@@ -1,10 +1,11 @@
 import 'express-async-errors'; 
+import { expressjwt } from 'express-jwt';
 import express from 'express';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import { Server } from 'socket.io';
 import { config } from 'dotenv';
-import http from 'http';
+import https from 'https';
 (async () => {
   await config({path: '.env'});
 })();
@@ -13,19 +14,40 @@ import MemoryModule from './services/MemoryService';
 import dungeonMasterRoutes from './routes/dungeonMaster';
 import userRoutes from './routes/UserRoutes';
 import socket from './routes/WebSocket';
-import { BadRequestError, ErrorHandler } from './middleware/ErrorHandler';
+import { ErrorHandler, SocketErrorHandler } from './middleware/ErrorHandler';
+import cookieParser from 'cookie-parser';
+import "cookie-parser"
+import socketAuth from './middleware/SocketAuth';
+import fs from 'fs';
+
 
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 
 
 app.use(bodyParser.json());
-app.use(cors())
+app.use(cors({
+  origin: 'https://localhost:3000',
+  credentials: true,
+}))
+app.use(cookieParser())
 
-app.use('/dungeon-master', dungeonMasterRoutes);
 app.use('/user', userRoutes);
-
+// Middleware to validate JWT and protect routes
+app.use(expressjwt(
+  { 
+    secret: process.env.SECRET_KEY!!,
+    algorithms: ['HS256'],
+    getToken: function fromCookie(req) {
+      if (req.cookies && req.cookies.token) {
+          return req.cookies.token;
+      }
+      return undefined; // if there isn't any token
+    },
+  }
+  ));
+app.use('/dungeon-master', dungeonMasterRoutes);
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
@@ -42,19 +64,20 @@ app.post("/memories/search", async (req, res) => {
   res.json(memories);
 });
 
-app.get('/test-error', async (req, res) => {
-  // This is a dummy async operation to simulate asynchronous errors.
-  await new Promise((resolve, reject) => setTimeout(() => reject(new BadRequestError("Test Error!")), 1000));
-});
+const privateKey = fs.readFileSync('keys/localhost+7-key.pem', 'utf8');
+const certificate = fs.readFileSync('keys/localhost+7.pem', 'utf8');
 
-
-const server = http.createServer(app);
+const server = https.createServer({ key: privateKey, cert: certificate }, app);
 
 const io = new Server(server, {
+  cookie: true,
   cors: {
-    origin: '*',
-  }
+    origin: 'https://localhost:3000',
+    // allow cookies
+    credentials: true,
+  },
 });
+
 socket(io);
 
 app.use(ErrorHandler);

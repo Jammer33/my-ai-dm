@@ -1,18 +1,17 @@
 import fetch from "node-fetch";
 import { PineconeClient } from "@pinecone-database/pinecone";
-import mysql, { OkPacket, RowDataPacket } from "mysql2/promise";
 import { GetObjectCommand, GetObjectCommandOutput, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { v4 as uuidv4 } from 'uuid';
-import { NewUser, NewUserWithToken } from "../models/General";
-import { DbUser } from "../db_models/DbUser";
-import { BadRequestError } from "../middleware/ErrorHandler";
+import Memory from "../db_models/memories";
+import MemoryQueries from "../queries/MemoryQueries";
+import SessionStateQueries from "../queries/SessionStateQueries";
+import SessionState from "../db_models/sessionState";
 
 
 class MemoryService {
   apiKey: string;
   pinecone: PineconeClient;
   index: string;
-  sqlClient: mysql.Pool;
   s3Client: S3Client;
   bucketName: string;
 
@@ -25,14 +24,6 @@ class MemoryService {
     });
     this.index = process.env.PINECONE_INDEX || "";
 
-    this.sqlClient = mysql.createPool({
-      host: process.env.AWS_RDS_HOST,
-      user: process.env.AWS_RDS_USER,
-      password: process.env.AWS_RDS_PASS,
-      database: 'ai_dm',
-      port: 3306,
-    });
-
     this.s3Client = new S3Client({
       region: "us-east-2",
       credentials: {
@@ -40,7 +31,7 @@ class MemoryService {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
       }
     });
-    this.bucketName = process.env.S3_BUCKET_NAME || "ai-dungeon-master";
+    this.bucketName = process.env.S3_BUCKET_NAME || "ai-dm";
   }
 
   async getEmbedding(text: string) {
@@ -93,24 +84,26 @@ class MemoryService {
   }
 
 
-  private async storeInternal(text: string, importance: number, namespace: string) {
+  private async storeInternal(text: string, importance: number, sessionToken: string) {
     const embedding = await this.getEmbedding(text);
     const timestamp = new Date();
 
     const id = await this.storeS3Bucket(text, importance, timestamp);
 
-    await this.sqlClient.query<OkPacket>(
-      "INSERT INTO memories (s3Id, timestamp, sessionToken) VALUES (?, ?, ?)",
-      [id, timestamp, namespace]
-    );
-
     const index = this.pinecone.Index(this.index);
-    await index.upsert({
-      upsertRequest: {
-        vectors: [{ id: id.toString(), values: embedding }],
-        namespace: namespace,
-      },
-    });
+
+    await Promise.all([
+      Memory.create({
+        s3Id: id,
+        sessionToken: sessionToken,
+      }),
+      await index.upsert({
+        upsertRequest: {
+          vectors: [{ id: id.toString(), values: embedding }],
+          namespace: sessionToken,
+        },
+      })
+    ]);
   }
 
   async retrieveRelevant(query: string, n = 3, sessionToken: string) {
@@ -146,14 +139,11 @@ class MemoryService {
   }
 
   async retrieveRecent(sessionToken: string) {
-    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
-      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp DESC LIMIT 3",
-      [sessionToken]
-    );
+    const memories = await MemoryQueries.findRecentMemoriesBySessionToken(sessionToken);
     
     let res = [];
-    for (let i = 0; i < rows.length; i++) {
-      const result = await this.retrieveS3Bucket(rows[i].s3Id);
+    for (let i = 0; i < memories.length; i++) {
+      const result = await this.retrieveS3Bucket(memories[i].s3Id);
       res.push({
         content: result.content,
         importance: result.importance,
@@ -163,63 +153,57 @@ class MemoryService {
   }
 
   async retrieveAll(sessionToken: string) {
-    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
-      "SELECT s3Id FROM memories WHERE sessionToken = ? ORDER BY timestamp ASC",
-      [sessionToken]
-    );
+    const memories = await MemoryQueries.findAllMemoriesBySessionToken(sessionToken);
 
     let res = [];
-    for (let i = 0; i < rows.length; i++) {
-      const result = await this.retrieveS3Bucket(rows[i].s3Id);
-      res.push({
-        content: result.content,
-      });
+    for (let i = 0; i < memories.length; i++) {
+      const result = this.retrieveS3Bucket(memories[i].s3Id);
+      res.push(result)
     }
+    res = await Promise.all(res);
+
+    for (let i = 0; i < res.length; i++) {
+      res[i] = {
+        content: res[i].content,
+        importance: res[i].importance,
+      };
+    }
+
     return res;
   }
 
 
   async retrieveSessionState(sessionToken: string) {
-    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
-      "SELECT content FROM session_state WHERE session_token = ?",
-      [sessionToken]
-    );
+    const sessionState = await SessionStateQueries.findSessionStateBySessionToken(sessionToken);
+    if (!sessionState) {
+      return "";
+    }
 
-    return rows[0]?.content;
+    const response = await this.retrieveS3Bucket(sessionState.s3Id);
+    return response.content;
   }
 
   async storeSessionState(sessionToken: string, state: string) {
-    const [result] = await this.sqlClient.query<OkPacket>(
-      "INSERT INTO session_state (session_token, content) VALUES (?, ?) ON DUPLICATE KEY UPDATE content = ?",
-      [sessionToken, state, state]
-    );
+    const sessionState = await SessionStateQueries.findSessionStateBySessionToken(sessionToken);
 
-    return result.insertId;
-  }
-
-  async storeUser(newUser: NewUserWithToken) {
-    try {
-      const [result] = await this.sqlClient.query<OkPacket>(
-        "INSERT INTO users (username, password, email, user_token) VALUES (?, ?, ?, ?)",
-        [newUser.username, newUser.password, newUser.email, newUser.userToken]
-      );
-      if (!result.insertId) {
-        throw new BadRequestError("Error creating user");
-      }
-      return newUser;
+    // if s3 id exists, update s3 bucket
+    if (sessionState) {
+      await this.s3Client.send(new PutObjectCommand({
+        Bucket: this.bucketName,
+        Body: JSON.stringify({
+          content: state,
+        }),
+        Key: sessionState.s3Id,
+      }));
+    } else {
+      // else create new s3 bucket
+      const id = await this.storeS3Bucket(state, 0, new Date());
+      
+      SessionState.create({
+        s3Id: id,
+        sessionToken: sessionToken,
+      });
     }
-    catch (err) {
-      throw new BadRequestError("User already exists");
-    }
-  }
-
-  async retrieveUser(email: string): Promise<DbUser | undefined> {
-    const [rows] = await this.sqlClient.query<RowDataPacket[]>(
-      "SELECT * FROM users WHERE email = ?",
-      [email]
-    );
-
-    return rows[0] as DbUser | undefined;
   }
 }
 
